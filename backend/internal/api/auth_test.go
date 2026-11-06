@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/sing-box-manager/sing-box-manager/backend/internal/core"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -164,5 +165,14 @@ func TestOpenStreamsEndAtLogoutAndExpiry(t *testing.T) {
 		if w := authRequest(s, "GET", "/api/config", "", cookie, nil); w.Code != 401 {
 			t.Fatal("expired cookie accepted", w.Code)
 		}
+	}
+}
+
+func TestAuthenticatedLogsAreNotStored(t *testing.T) {
+	s := &Server{Engine: &core.Engine{Local: true}}
+	s.sessions.Store("test", newSession(time.Now().Add(time.Minute)))
+	w := authRequest(s, "GET", "/api/logs", "", &http.Cookie{Name: "manager_session", Value: "test"}, nil)
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("sensitive log stream permits storage")
 	}
 }
