@@ -1,6 +1,6 @@
 # Publishing a release
 
-No remote repository or release has been created by this implementation. Choose an authorized repository before running these commands; they are documentation, not evidence of publication.
+The repository is [KenLeeLCK/Singbox-UI](https://github.com/KenLeeLCK/Singbox-UI). As of November 6, 2026, no GitHub Release has been published. The commands below are maintainer instructions: pushing a version tag triggers publication.
 
 ```sh
 npm --prefix frontend ci
@@ -16,11 +16,8 @@ bash scripts/package.sh v0.1.0
 Inspect the diff and secrets exclusions before committing. Confirm `.tools`, `.local`, binaries, `.env`, tokens and real configuration files remain ignored.
 
 ```sh
-git branch -M main
-git remote add origin git@github.com:YOUR_ORG/YOUR_REPOSITORY.git
-git add .
-git commit -m "Implement sing-box Manager"
-git push -u origin main
+git remote -v
+git push origin main
 git tag v0.1.0
 git push origin v0.1.0
 ```
