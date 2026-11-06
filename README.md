@@ -17,33 +17,6 @@ A private, single-binary web manager for existing sing-box installations. React 
 - Loopback listener beginning at port 5030, automatic bounded fallback through 5099, persisted selection and instance locking.
 - Non-root HTTP process; separate narrow root helper over a restricted Unix socket. Authentication and browser origin protection.
 - Existing installation discovery, conservative read-only handling of ambiguous or multiple sources, embedded frontend, Debian/Ubuntu installer, private Tailscale Serve setup and release packaging.
-
-## Local development
-
-Requirements: Go matching `backend/go.mod`, Node.js 22.12+ (Node 26 also tested), npm, and a sing-box 1.14 binary for schema/check/monitoring. Linux production requires systemd; macOS development can inspect, edit drafts and validate an isolated configuration without modifying system services.
-
-```sh
-npm --prefix frontend ci
-npm --prefix frontend run build
-mkdir -p .local
-printf '{"inbounds":[],"outbounds":[{"type":"direct","tag":"direct"}]}' > .local/config.json
-cd backend
-go run ./cmd/manager serve --local --state-dir ../.local/state \
-  --config "$PWD/../.local/config.json" --sing-box /absolute/path/to/sing-box
-```
-
-Open the loopback URL printed by Manager (normally `http://127.0.0.1:5030`). Read the access token from `.local/state/token` in a local terminal and enter it in the login form. Tokens are never compiled into the UI. `--local` deliberately disables apply/restart; it supports real binary schema generation and configuration checks.
-
-For frontend hot reload, run `npm --prefix frontend run dev` in another terminal while the Go server is listening on 5030. Vite proxies API requests to the backend; production uses one embedded origin.
-
-```sh
-npm --prefix frontend run lint
-npm --prefix frontend run typecheck
-npm --prefix frontend test
-(cd backend && go test -race ./...)
-python3 tests/installer_test.py
-# Optional real binary integration (loopback/temporary fixtures only):
-(cd backend && SING_BOX_BIN=/absolute/path/to/sing-box go test -race -v ./...)
 ```
 
 ## Production build
