@@ -157,16 +157,19 @@ func TestSingleDirectoryLayouts(t *testing.T) {
 }
 
 func TestDirectoryUnsupportedEntries(t *testing.T) {
-	for _, directoryLink := range []bool{false, true} {
-		t.Run(fmt.Sprint(directoryLink), func(t *testing.T) {
+	for _, layout := range []string{"file", "directory", "directory-trailing-slash"} {
+		t.Run(layout, func(t *testing.T) {
 			dir := t.TempDir()
 			parts := filepath.Join(dir, "parts")
 			os.Mkdir(parts, 0700)
 			os.WriteFile(filepath.Join(dir, "original.json"), []byte(`{}`), 0600)
-			if directoryLink {
+			if layout != "file" {
 				os.WriteFile(filepath.Join(parts, "config.json"), []byte(`{}`), 0600)
 				os.Symlink(parts, filepath.Join(dir, "link"))
 				parts = filepath.Join(dir, "link")
+				if layout == "directory-trailing-slash" {
+					parts += "/"
+				}
 			} else {
 				os.Symlink(filepath.Join(dir, "original.json"), filepath.Join(parts, "config.json"))
 			}

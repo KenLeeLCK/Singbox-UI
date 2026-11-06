@@ -242,6 +242,7 @@ func parseDiscovery(o *Options, s string) {
 			if !filepath.IsAbs(dir) {
 				dir = filepath.Join(o.WorkingDir, dir)
 			}
+			dir = filepath.Clean(dir)
 			info, err := os.Lstat(dir)
 			if err != nil || !info.IsDir() {
 				o.ReadOnly = true
