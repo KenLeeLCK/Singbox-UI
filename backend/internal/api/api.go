@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -23,6 +22,7 @@ type Server struct {
 	Engine    *core.Engine
 	Remote    *http.Client
 	Token     string
+	Auth      AuthOptions
 	Telemetry http.Handler
 	sessions  sync.Map
 	loginMu   sync.Mutex
@@ -48,7 +48,14 @@ func New(e *core.Engine, state, socket string) (*Server, error) {
 	if er != nil {
 		return nil, er
 	}
+	st, err := os.Lstat(p)
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 {
+		return nil, fmt.Errorf("token must be a regular owner-only file")
+	}
 	s.Token = strings.TrimSpace(string(b))
+	if len(s.Token) < 32 || len(s.Token) > 256 {
+		return nil, fmt.Errorf("token must contain 32–256 characters; manual rotation required")
+	}
 	if socket != "" {
 		s.Remote = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -73,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
 		if r.URL.Path == "/healthz" {
 			response(w, 200, map[string]bool{"ok": true})
 			return
@@ -83,12 +91,17 @@ func (s *Server) Handler() http.Handler {
 		}
 		if o := r.Header.Get("Origin"); o != "" {
 			u, er := url.Parse(o)
-			if er != nil || u.Host != r.Host || (u.Scheme != "http" && u.Scheme != "https") {
+			if er != nil || u.Host != r.Host || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") || (u.Scheme == "http" && secureCookie(r)) {
 				http.Error(w, "origin denied", 403)
 				return
 			}
 		}
 		if r.URL.Path == "/api/login" && r.Method == "POST" {
+			if r.Method != "GET" && r.Header.Get("Origin") == "" && r.Header.Get("X-Requested-With") != "sing-box-manager" {
+				http.Error(w, "CSRF header required", 403)
+				return
+			}
+
 			s.login(w, r)
 			return
 		}
@@ -97,9 +110,9 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "authentication required", 401)
 			return
 		}
-		expiry, ok := s.sessions.Load(c.Value)
-		if !ok || time.Now().After(expiry.(time.Time)) {
-			s.sessions.Delete(c.Value)
+		entry, ok := s.sessions.Load(c.Value)
+		if !ok || !time.Now().Before(entry.(*session).expires) {
+			s.revoke(c.Value)
 			http.Error(w, "session expired", 401)
 			return
 		}
@@ -107,8 +120,13 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "CSRF header required", 403)
 			return
 		}
+		ctx, cancel := context.WithDeadline(r.Context(), entry.(*session).expires)
+		stop := context.AfterFunc(entry.(*session).ctx, cancel)
+		defer stop()
+		defer cancel()
+		r = r.WithContext(ctx)
 		if r.URL.Path == "/api/logout" && r.Method == "POST" {
-			s.sessions.Delete(c.Value)
+			s.revoke(c.Value)
 			http.SetCookie(w, &http.Cookie{Name: "manager_session", MaxAge: -1, Path: "/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode})
 			response(w, 200, map[string]bool{"ok": true})
 			return
@@ -160,53 +178,6 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
-// Host is preserved by Tailscale Serve's TCP HTTP reverse proxy. Origin has
-// already passed the same-host check in Handler. Forwarded headers are deliberately
-// ignored: supporting Host-rewriting proxies requires an explicit trust model.
-func secureCookie(r *http.Request) bool {
-	return r.TLS != nil || strings.HasPrefix(r.Header.Get("Origin"), "https://")
-}
-
-func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	s.loginMu.Lock()
-	if time.Since(s.window) > time.Minute {
-		s.window = time.Now()
-		s.attempts = 0
-	}
-	s.attempts++
-	n := s.attempts
-	s.loginMu.Unlock()
-	if n > 10 {
-		http.Error(w, "too many login attempts", 429)
-		return
-	}
-	var q struct {
-		Token string `json:"token"`
-	}
-	if er := decode(w, r, &q); er != nil {
-		fail(w, er)
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(q.Token), []byte(s.Token)) != 1 {
-		http.Error(w, "invalid token", 401)
-		return
-	}
-	v := make([]byte, 32)
-	if _, err := rand.Read(v); err != nil {
-		fail(w, fmt.Errorf("cannot create session"))
-		return
-	}
-	key := hex.EncodeToString(v)
-	s.sessions.Range(func(k, v any) bool {
-		if time.Now().After(v.(time.Time)) {
-			s.sessions.Delete(k)
-		}
-		return true
-	})
-	s.sessions.Store(key, time.Now().Add(12*time.Hour))
-	http.SetCookie(w, &http.Cookie{Name: "manager_session", Value: key, Path: "/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: 43200})
-	response(w, 200, map[string]bool{"ok": true})
-}
 func (s *Server) Config() (map[string]any, error) {
 	var snap core.Snapshot
 	if s.Remote != nil {

@@ -14,13 +14,11 @@ it("classifies plain text 401 responses by status", async () => {
 it("preserves actionable backend validation messages", async () => {
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ error: "live configuration changed" }), {
-          status: 400,
-        }),
-      ),
+    vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "live configuration changed" }), {
+        status: 400,
+      }),
+    ),
   );
   await expect(api("validate", "POST", {})).rejects.toThrow(
     "live configuration changed",
@@ -48,4 +46,22 @@ it("uses same-origin credentials, CSRF header and a bounded request", async () =
     }),
   );
   expect(new ApiError(401, "expired")).toBeInstanceOf(Error);
+});
+
+it("reports temporary login throttling with retry guidance", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response("too many attempts", {
+          status: 429,
+          headers: { "Retry-After": "37" },
+        }),
+      ),
+  );
+  await expect(api("login", "POST", { token: "test" })).rejects.toMatchObject({
+    status: 429,
+    message: "Too many login attempts. Try again in 37 seconds.",
+  });
 });

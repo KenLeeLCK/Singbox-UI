@@ -2,7 +2,7 @@
 
 All routes use the same origin as the embedded UI. Responses and streams are `no-store`. Error responses may be JSON `{ "error": "..." }` or plain text for authentication/CSRF failures. JSON bodies are limited to 4 MiB. API endpoints other than login require a valid `manager_session` cookie.
 
-For browser writes, send a matching `Origin`. For non-browser clients send `X-Requested-With: sing-box-manager` and retain the login cookie. Never place the token in a URL. Cross-site Fetch requests and mismatched origins are denied.
+For browser writes, send a matching `Origin`. For non-browser clients send `X-Requested-With: sing-box-manager` and retain the login cookie. Login is subject to the global failed-attempt budget; HTTP 429 includes Retry-After. Send the same Origin or X-Requested-With header for login as for other mutations. Never place the token in a URL. Cross-site Fetch requests and mismatched origins are denied.
 
 | Method | Path | Request / response |
 | --- | --- | --- |

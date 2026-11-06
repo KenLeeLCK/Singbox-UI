@@ -9,6 +9,7 @@ import (
 	"github.com/sing-box-manager/sing-box-manager/backend/internal/core"
 	"github.com/sing-box-manager/sing-box-manager/backend/internal/telemetry"
 	"github.com/sing-box-manager/sing-box-manager/backend/internal/web"
+	"golang.org/x/net/netutil"
 	"log"
 	"net"
 	"net/http"
@@ -41,7 +42,13 @@ func main() {
 	group := f.String("socket-group", "sing-box-manager", "socket group")
 	port := f.Int("port", 5030, "preferred loopback port")
 	max := f.Int("port-max", 5099, "last permitted port")
+	loginAttempts := f.Int("login-attempts", 10, "global failed logins per window")
+	loginWindow := f.Duration("login-window", time.Minute, "global login failure window")
+	sessionTTL := f.Duration("session-ttl", 8*time.Hour, "absolute session lifetime")
 	f.Parse(args)
+	if *loginAttempts < 1 || *loginAttempts > 100 || *loginWindow < time.Second || *loginWindow > time.Hour || *sessionTTL < time.Second || *sessionTTL > 24*time.Hour {
+		log.Fatal("invalid authentication limits")
+	}
 	if *port < 1024 || *max > 65535 || *max < *port {
 		log.Fatal("invalid port search range")
 	}
@@ -119,6 +126,7 @@ func main() {
 		if er != nil {
 			log.Fatal(er)
 		}
+		s.Auth = api.AuthOptions{LoginAttempts: *loginAttempts, LoginWindow: *loginWindow, SessionTTL: *sessionTTL}
 		monitor := telemetry.New(s.Config)
 		s.Telemetry = http.HandlerFunc(monitor.Handler)
 		go monitor.Run(ctx)
@@ -156,9 +164,10 @@ func main() {
 		mux.Handle("/healthz", s.Handler())
 		mux.Handle("/", web.Handler())
 		handler = mux
+		listener = netutil.LimitListener(listener, 256)
 		log.Printf("Manager listening on http://127.0.0.1:%d; login token in %s", saved.Port, filepath.Join(*state, "token"))
 	}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	go func() {
 		<-ctx.Done()
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)

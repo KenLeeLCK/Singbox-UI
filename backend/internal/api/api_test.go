@@ -24,7 +24,7 @@ func TestAuthenticationAndCSRF(t *testing.T) {
 	}
 	h := s.Handler()
 	call := func(method, path, body, origin string, c *http.Cookie) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		r := httptest.NewRequest(method, "http://localhost"+path, bytes.NewBufferString(body))
 		if origin != "" {
 			r.Header.Set("Origin", origin)
 		}
@@ -42,7 +42,7 @@ func TestAuthenticationAndCSRF(t *testing.T) {
 	if w := call("POST", "/api/login", string(b), "https://evil.test", nil); w.Code != 403 {
 		t.Fatal("cross-origin login accepted")
 	}
-	w := call("POST", "/api/login", string(b), "http://example.com", nil)
+	w := call("POST", "/api/login", string(b), "http://localhost", nil)
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
@@ -97,7 +97,7 @@ func TestNativeAPISchemaCapability(t *testing.T) {
 }
 func TestLogoutRequiresPOST(t *testing.T) {
 	s := &Server{}
-	s.sessions.Store("test", time.Now().Add(time.Hour))
+	s.sessions.Store("test", newSession(time.Now().Add(time.Hour)))
 	r := httptest.NewRequest("GET", "/api/logout", nil)
 	r.AddCookie(&http.Cookie{Name: "manager_session", Value: "test"})
 	w := httptest.NewRecorder()
@@ -115,15 +115,15 @@ func TestSessionTransportAndExpiry(t *testing.T) {
 		name, origin, forwarded string
 		secure                  bool
 	}{
-		{"localhost", "http://example.com", "", false},
-		{"serve-preserves-host", "https://example.com", "https", true},
-		{"spoofed-forwarded", "http://example.com", "https", false},
+		{"localhost", "http://localhost", "", false},
+		{"serve-preserves-host", "https://localhost", "https", true},
+		{"spoofed-forwarded", "http://localhost", "https", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{Token: "isolated-test-token"}
 			call := func(path, origin, token string, cookie *http.Cookie) *httptest.ResponseRecorder {
 				body, _ := json.Marshal(map[string]string{"token": token})
-				r := httptest.NewRequest("POST", path, bytes.NewReader(body))
+				r := httptest.NewRequest("POST", "http://localhost"+path, bytes.NewReader(body))
 				r.Header.Set("Origin", origin)
 				r.Header.Set("X-Forwarded-Proto", tc.forwarded)
 				r.Header.Set("X-Forwarded-Host", "evil.test")
@@ -142,7 +142,7 @@ func TestSessionTransportAndExpiry(t *testing.T) {
 				t.Fatal(w.Code)
 			}
 			c := w.Result().Cookies()[0]
-			if c.Secure != tc.secure || !c.HttpOnly || c.Path != "/" || c.MaxAge != 43200 || c.SameSite != http.SameSiteStrictMode {
+			if c.Secure != tc.secure || !c.HttpOnly || c.Path != "/" || c.MaxAge != 28800 || c.SameSite != http.SameSiteStrictMode {
 				t.Fatal("incorrect cookie attributes")
 			}
 			if w := call("/api/logout", "https://evil.test", "", c); w.Code != 403 {
@@ -155,7 +155,7 @@ func TestSessionTransportAndExpiry(t *testing.T) {
 			if w := call("/api/logout", tc.origin, "", c); w.Code != 401 {
 				t.Fatal("session survived logout")
 			}
-			s.sessions.Store(c.Value, time.Now().Add(-time.Second))
+			s.sessions.Store(c.Value, newSession(time.Now().Add(-time.Second)))
 			if w := call("/api/logout", tc.origin, "", c); w.Code != 401 {
 				t.Fatal("expired session accepted")
 			}

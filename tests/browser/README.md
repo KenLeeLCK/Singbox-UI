@@ -21,3 +21,5 @@ Failure traces retain DOM/network diagnostics after replacing generated tokens a
 ## Dashboard activity regression
 
 `node tests/browser/activity.mjs` serves the production frontend build with synthetic telemetry on an ephemeral loopback port. It checks newest-first ordering, ten-row previews, hidden counts, keyboard controls, a 480px expanded viewport, live scroll anchoring when rows arrive/close, retained state across empty feeds, and unchanged row DOM for counter-only updates with hundreds of connections. Desktop and mobile layouts, including reduced motion, are covered. It uses no production credentials or services and runs as part of the browser test command. Build the frontend first.
+
+The `security.mjs` suite adds real short-lived session expiry, temporary global lockout/recovery, forged forwarding-header resistance, protected API denial and framing/CSP checks over HTTP and HTTPS. It uses disposable state and no production secrets.

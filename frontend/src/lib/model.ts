@@ -126,13 +126,16 @@ export async function api(path: string, method = "GET", body?: unknown) {
   });
   if (!r.ok) {
     const detail = await r.json().catch(() => null);
+    const retryAfter = Number(r.headers.get("Retry-After"));
     const message =
       r.status === 401
         ? path === "login"
           ? "Invalid access token."
           : "Your session expired. Sign in again."
-        : detail?.error ||
-          `Request failed (${r.status}). Check Manager connectivity and retry.`;
+        : r.status === 429 && path === "login"
+          ? `Too many login attempts. ${retryAfter > 0 && retryAfter <= 3600 ? `Try again in ${Math.ceil(retryAfter)} seconds.` : "Wait briefly and try again."}`
+          : detail?.error ||
+            `Request failed (${r.status}). Check Manager connectivity and retry.`;
     throw new ApiError(r.status, message);
   }
   const value = await r.json().catch(() => {

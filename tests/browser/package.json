@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node activity.mjs && node auth.mjs && node smoke.mjs && node smoke.mjs --defer-editor-idle && node smoke.mjs --https"
+    "test": "node security.mjs && node activity.mjs && node auth.mjs && node smoke.mjs && node smoke.mjs --defer-editor-idle && node smoke.mjs --https"
   },
   "devDependencies": {
     "playwright": "1.65.0"
