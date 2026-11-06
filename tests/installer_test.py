@@ -53,4 +53,32 @@ class DiscoveryTests(unittest.TestCase):
     def test_broken_service_is_never_absence(self):
         with self.assertRaisesRegex(ValueError,'missing or not executable'):
             self.discovery.validate('custom.service',{'LoadState':'loaded','ExecStart':'{ path=/certainly/missing/sing-box ; }'})
+class ListenerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec=importlib.util.spec_from_file_location('listener',ROOT/'scripts/check-listener.py')
+        cls.listener=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.listener)
+    def fixture(self, root, address='0100007F:13A7', state='0A', inode='123'):
+        process=root/'42'
+        (process/'fd').mkdir(parents=True)
+        (process/'net').mkdir()
+        (process/'fd/5').symlink_to('socket:[123]')
+        (process/'net/tcp').write_text('header\n'+f'0: {address} 00000000:0000 {state} 0:0 0:0 0 1000 0 {inode}\n')
+    def test_service_owns_loopback_listener(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root)
+            self.assertTrue(self.listener.owns_listener(42,5031,root))
+    def test_unrelated_listener_cannot_impersonate_health(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root,inode='456')
+            self.assertFalse(self.listener.owns_listener(42,5031,root))
+    def test_wrong_port_address_or_nonlistener_rejected(self):
+        for address,state in [('0100007F:13A8','0A'),('00000000:13A7','0A'),('0100007F:13A7','01')]:
+            with self.subTest(address=address,state=state), tempfile.TemporaryDirectory() as d:
+                root=pathlib.Path(d);self.fixture(root,address,state)
+                self.assertFalse(self.listener.owns_listener(42,5031,root))
+    def test_exited_or_zero_pid_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(self.listener.owns_listener(42,5031,pathlib.Path(d)))
+            self.assertFalse(self.listener.owns_listener(0,5031,pathlib.Path(d)))
 if __name__=='__main__': unittest.main()

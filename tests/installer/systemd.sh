@@ -35,11 +35,13 @@ docker exec "$NAME" systemctl restart sing-box-manager
 sleep 2
 docker exec "$NAME" curl --fail http://127.0.0.1:5031/healthz
 # Update never changes sing-box; failed replacement recovers the old Manager.
+# Delay the broken process exit so Type=simple is deterministically active while
+# the unrelated listener impersonates health on the stale selected port.
 docker exec "$NAME" systemctl stop sing-box-manager
 docker exec -d "$NAME" python3 /package/fake_health.py
 sleep 1
 docker exec "$NAME" curl --fail http://127.0.0.1:5031/healthz
-docker exec "$NAME" sh -c 'cp /package/manager /package/manager.good; printf "#!/bin/sh\nexit 1\n" > /package/manager; chmod +x /package/manager'
+docker exec "$NAME" sh -c 'cp /package/manager /package/manager.good; printf "#!/bin/sh\nsleep 5\nexit 1\n" > /package/manager; chmod +x /package/manager'
 if docker exec "$NAME" bash /package/scripts/update.sh --local-package /package; then echo 'Expected failed update' >&2; exit 1; fi
 docker exec "$NAME" sh -c 'cmp /usr/local/lib/sing-box-manager/manager /package/manager.good && sha256sum -c /tmp/before'
 docker exec "$NAME" sh -c 'cp /package/manager.good /package/manager'

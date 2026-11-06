@@ -110,10 +110,19 @@ systemctl enable sing-box-manager-helper.service sing-box-manager.service || fai
 systemctl restart sing-box-manager-helper.service sing-box-manager.service || failed=1
 PORT=''
 manager_healthy() {
+  local pid
   [[ $PORT =~ ^[0-9]+$ ]] || return 1
   systemctl is-active --quiet sing-box-manager-helper.service || return 1
   systemctl is-active --quiet sing-box-manager.service || return 1
-  curl --fail --silent --max-time 2 "http://127.0.0.1:$PORT/healthz" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin) == {"ok":True} else 1)' 2>/dev/null
+  pid=$(systemctl show sing-box-manager.service -p MainPID --value) || return 1
+  # Type=simple can be active before startup completes. A stale selected port
+  # may belong to another listener returning the exact same health JSON.
+  python3 "$HERE/check-listener.py" "$pid" "$PORT" || return 1
+  curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.1:$PORT/healthz" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin) == {"ok":True} else 1)' 2>/dev/null || return 1
+  [[ $pid == "$(systemctl show sing-box-manager.service -p MainPID --value)" ]] || return 1
+  systemctl is-active --quiet sing-box-manager-helper.service || return 1
+  systemctl is-active --quiet sing-box-manager.service || return 1
+  python3 "$HERE/check-listener.py" "$pid" "$PORT"
 }
 for ((i=0;i<30;i++)); do
   PORT=$(python3 -c 'import json; print(json.load(open("/var/lib/sing-box-manager/selected-port.json"))["port"])' 2>/dev/null || true)
