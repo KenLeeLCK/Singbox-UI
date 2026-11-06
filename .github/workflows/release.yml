@@ -31,6 +31,15 @@ jobs:
       - run: python3 tests/installer_test.py
       - name: Real sing-box and browser integration
         run: bash scripts/ci-browser.sh
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-${{ github.run_attempt }}
+          path: .local/browser-artifacts/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Isolated systemd installation and rollback scenarios
         run: bash tests/installer/systemd.sh
       - name: Existing custom installation discovery

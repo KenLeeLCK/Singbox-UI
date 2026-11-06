@@ -9,7 +9,8 @@
     "typecheck": "tsc -b",
     "lint": "eslint src",
     "test": "vitest run",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "postinstall": "patch-package --error-on-fail"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.15",
@@ -26,6 +27,7 @@
     "@types/react-dom": "19.0.2",
     "@vitejs/plugin-react": "6.2.1",
     "eslint": "10.14.0",
+    "patch-package": "8.0.1",
     "prettier": "3.9.10",
     "tailwindcss": "4.3.4",
     "typescript": "5.7.2",

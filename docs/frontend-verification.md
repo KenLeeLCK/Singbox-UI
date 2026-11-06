@@ -52,3 +52,31 @@ Real browser testing reproduced two independent disposal defects: the third-part
 - Light appearance uses explicit white glass materials and dark text colors with a root theme attribute covering portal dialogs. No color-inversion filters are used; chart colors remain intact.
 
 Additional files: `frontend/src/components/CodeEditor.tsx`, `editorLifecycle.ts`, `editorLifecycle.test.ts`; updated `tests/browser/smoke.mjs` with lifecycle cycles and browser error-stack diagnostics. Static editor assets remain local and embedded.
+
+## CI regression at f624cff: global Monaco services
+
+The GitHub run failed inside Monaco 0.57.0 with `InstantiationService has been disposed`, through the global hover factory, ActionBar and deferred SuggestWidget construction. A diff editor overwrote the global hover factory with a closure over its disposable child service. Closing the diff left other editors using that disposed service. The sibling global Markdown renderer had the same lifetime mismatch.
+
+Reproduction in Ubuntu 24.04 ARM64, Node 22.23.4 and real sing-box 1.14.4:
+
+- Native timing was intermittent. Opening a context menu after closing the diff reproduced the stale service reliably.
+- Deferring idle work until after diff disposal reproduced the original SuggestWidget stack and subsequent JSON Editor navigation timeout. Failure DOM showed `rootChildren: 0` and no nav buttons: React had unmounted after the error. This was not hidden/obstructed navigation or an asset-loading failure. Local script/style responses and both Monaco worker URLs were captured successfully.
+- The patched production build passes the same controlled scheduling scenario and native scheduling. Frontend lint, typecheck, all 11 unit tests, clean npm install and production build pass; npm audit reports zero vulnerabilities.
+
+`frontend/patches/monaco-editor+0.57.0.patch` binds both global factories to the application-lifetime `StandaloneServices` instantiation service. `patch-package --error-on-fail` applies it during npm install/ci. Normal editor/model disposal and all error assertions remain enabled. No timeouts were increased. On dependency upgrades, inspect upstream ownership and remove the patch only after both browser scheduling modes pass unpatched. Related upstream reports: [Monaco #5518](https://github.com/microsoft/monaco-editor/issues/5518), [VS Code #279709](https://github.com/microsoft/vscode/issues/279709).
+
+The browser fixture also reserves both ephemeral ports together, preventing Linux from reusing one port for both Manager and sing-box.
+
+### Reproduce and inspect failures
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run build
+bash scripts/ci-browser.sh
+```
+
+The browser test runs twice: native idle scheduling and controlled deferred idle scheduling. Both cover post-diff context menus/Find/JSON suggestions, repeated mount/unmount, real native API/schema validation, draft CRUD, conflict protection, and desktop/mobile layouts. The deferred mode is test-only; it does not alter application scheduling.
+
+Failures write `events.json`, `failure.png`, `failure.html`, and `trace.zip` under `.local/browser-artifacts/<timestamp>/`. Events include console arguments/nested errors, uncaught exception stacks, network failures/asset response metadata, worker URLs, child-process output and root/nav visibility/hit-test state. View a trace with `cd tests/browser && npx playwright show-trace /absolute/path/to/trace.zip`. CI and release retain these artifacts for seven days. Traces contain only isolated test-fixture sessions; never run this harness against production.
+
+Set `BROWSER_ARTIFACT_DIR` to override the output directory. Routine screenshots go there too; set `UPDATE_SCREENSHOTS=1` explicitly to refresh tracked documentation screenshots.

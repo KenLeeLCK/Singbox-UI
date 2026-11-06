@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node smoke.mjs"
+    "test": "node smoke.mjs && node smoke.mjs --defer-editor-idle"
   },
   "devDependencies": {
     "playwright": "1.65.0"

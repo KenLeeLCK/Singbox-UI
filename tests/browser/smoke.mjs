@@ -6,6 +6,7 @@ import path from "node:path";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import { diagnostics } from "./diagnostics.mjs";
 const root = path.resolve(import.meta.dirname, "../..");
 const binary = process.env.MANAGER_BIN || path.join(root, "artifacts/manager");
 const singbox = process.env.SING_BOX_BIN;
@@ -14,14 +15,39 @@ if (!singbox)
     "Set SING_BOX_BIN to a verified local binary; this suite uses only isolated temporary files and loopback ports.",
   );
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), "manager-browser-"));
-let browser, manager, proxy, page;
+const artifactDir = path.resolve(
+  process.env.BROWSER_ARTIFACT_DIR ||
+    path.join(
+      root,
+      ".local/browser-artifacts",
+      new Date().toISOString().replaceAll(":", "-"),
+    ),
+);
+const diagnostic = await diagnostics(artifactDir);
+const screenshotDir =
+  process.env.UPDATE_SCREENSHOTS === "1"
+    ? path.join(root, "docs/screenshots")
+    : artifactDir;
+let browser, context, manager, proxy, page;
+let failed = false;
 const errors = [];
-async function port() {
-  const server = net.createServer();
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const p = server.address().port;
-  await new Promise((r) => server.close(r));
-  return p;
+const deferEditorIdle = process.argv.includes("--defer-editor-idle");
+async function ports() {
+  // Keep both reservations open until allocated: closing the first before
+  // asking for the second lets Linux return the same ephemeral port twice.
+  const servers = [net.createServer(), net.createServer()];
+  try {
+    for (const server of servers)
+      await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+    return servers.map((server) => server.address().port);
+  } finally {
+    await Promise.all(
+      servers.map((server) => new Promise((resolve) => server.close(resolve))),
+    );
+  }
 }
 async function wait(fn) {
   for (let i = 0; i < 100; i++) {
@@ -34,8 +60,8 @@ async function wait(fn) {
   throw Error("Readiness timeout");
 }
 try {
-  const apiPort = await port(),
-    webPort = await port();
+  const [apiPort, webPort] = await ports();
+  assert.notEqual(apiPort, webPort, "fixture services need distinct ports");
   const live = {
     log: { level: "error" },
     inbounds: [],
@@ -52,7 +78,9 @@ try {
   };
   const configPath = path.join(dir, "config.json");
   await fs.writeFile(configPath, JSON.stringify(live), { mode: 0o600 });
-  proxy = spawn(singbox, ["run", "-c", configPath], { stdio: "ignore" });
+  proxy = spawn(singbox, ["run", "-c", configPath], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   manager = spawn(
     binary,
     [
@@ -69,20 +97,56 @@ try {
       "--port-max",
       String(webPort),
     ],
-    { stdio: "ignore" },
+    { stdio: ["ignore", "pipe", "pipe"] },
   );
+  diagnostic.process("sing-box", proxy);
+  diagnostic.process("manager", manager);
   const base = `http://127.0.0.1:${webPort}`;
   await wait(async () => (await fetch(base + "/healthz")).ok);
   const token = (
     await fs.readFile(path.join(dir, "state/token"), "utf8")
   ).trim();
   browser = await chromium.launch();
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+  });
+  await context.tracing.start({
+    screenshots: true,
+    snapshots: true,
+    sources: true,
+  });
+  page = await context.newPage();
+  diagnostic.page(page);
   page.setDefaultTimeout(10000);
   page.on("pageerror", (e) => {
-    errors.push(e.message);
+    errors.push({ name: e.name, message: e.message, stack: e.stack });
     console.error("BROWSER ERROR STACK", e.stack);
   });
+  if (deferEditorIdle) {
+    // Model a busy renderer deterministically. Flush idle work only after the
+    // diff's services have been disposed, preserving cancellation semantics.
+    await page.addInitScript(() => {
+      const callbacks = new Map();
+      let next = 0;
+      window.requestIdleCallback = (callback) => {
+        const id = ++next;
+        callbacks.set(id, callback);
+        return id;
+      };
+      window.cancelIdleCallback = (id) => callbacks.delete(id);
+      window.flushTestIdle = () => {
+        while (callbacks.size) {
+          const [id, callback] = callbacks.entries().next().value;
+          callbacks.delete(id);
+          callback({ didTimeout: false, timeRemaining: () => 50 });
+        }
+      };
+    });
+  }
+  console.log(
+    "Browser scheduling:",
+    deferEditorIdle ? "deferred idle regression" : "native",
+  );
   await page.goto(base);
   await page.getByLabel("Manager access token").fill(token);
   await page.getByRole("button", { name: "Unlock Manager" }).click();
@@ -202,6 +266,32 @@ try {
   await page.getByRole("button", { name: "View diff", exact: true }).click();
   await dialog().locator(".monaco-diff-editor").waitFor();
   await dialog().getByRole("button", { name: "Keep editing" }).click();
+  async function checkEditorAfterDiffDisposal() {
+    if (deferEditorIdle) await page.evaluate(() => window.flushTestIdle());
+    // Force fresh hover/action-bar consumers after disposing the diff's child
+    // services. The old failure otherwise depends on deferred widget timing.
+    await page
+      .locator(".monaco-editor .view-lines")
+      .first()
+      .click({ button: "right" });
+    await page.getByRole("menu").waitFor();
+    await page.keyboard.press("Escape");
+    await page.locator(".monaco-editor textarea").first().focus();
+    await page.keyboard.press(
+      process.platform === "darwin" ? "Meta+f" : "Control+f",
+    );
+    await page.locator(".monaco-editor .find-widget.visible").waitFor();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press(
+      process.platform === "darwin" ? "Meta+Home" : "Control+Home",
+    );
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Control+Space");
+    await page.locator(".monaco-editor .suggest-widget.visible").waitFor();
+    await page.keyboard.press("Escape");
+    assert.deepEqual(errors, [], "editor controls must survive diff disposal");
+  }
+  await checkEditorAfterDiffDisposal();
   await page.getByRole("button", { name: "Live Logs", exact: true }).click();
   await dialog().getByLabel("Search logs").fill("INFO");
   await dialog().getByRole("button", { name: "Pause", exact: true }).click();
@@ -215,6 +305,7 @@ try {
     await page.getByRole("button", { name: "View diff", exact: true }).click();
     await dialog().locator(".monaco-diff-editor").waitFor();
     await dialog().getByRole("button", { name: "Keep editing" }).click();
+    await checkEditorAfterDiffDisposal();
     await nav("Overview").click();
     assert.equal(
       await page.locator(".monaco-editor").count(),
@@ -224,7 +315,7 @@ try {
     await page.waitForTimeout(100);
   }
   console.log(
-    "PASS three repeated Monaco/diff mount-unmount cycles with widget cleanup",
+    "PASS three Monaco/diff mount-unmount cycles, context menus, find, suggestions and widget cleanup",
   );
   // Polling must detect external edits and prevent stale writes.
   await fs.writeFile(
@@ -246,14 +337,14 @@ try {
   await nav("Overview").click();
   await page.getByText("Native API connected", { exact: true }).waitFor();
   await page.screenshot({
-    path: path.join(root, "docs/screenshots/overview-desktop.png"),
+    path: path.join(screenshotDir, "overview-desktop.png"),
     fullPage: true,
   });
   await page
     .getByRole("button", { name: "Light appearance", exact: true })
     .click();
   await page.screenshot({
-    path: path.join(root, "docs/screenshots/overview-light.png"),
+    path: path.join(screenshotDir, "overview-light.png"),
     fullPage: true,
   });
   await page
@@ -269,13 +360,13 @@ try {
     "mobile page overflows",
   );
   await page.screenshot({
-    path: path.join(root, "docs/screenshots/overview-mobile.png"),
+    path: path.join(screenshotDir, "overview-mobile.png"),
   });
   await nav("Inbounds").click();
   await page.getByRole("button", { name: "Add inbound", exact: true }).click();
   assert.ok(await dialog().isVisible());
   await page.screenshot({
-    path: path.join(root, "docs/screenshots/editor-mobile.png"),
+    path: path.join(screenshotDir, "editor-mobile.png"),
   });
   await dialog().getByLabel("Close", { exact: true }).click();
   for (const name of [
@@ -299,20 +390,22 @@ try {
     "PASS desktop/light/all mobile pages and mobile editor; no browser exceptions",
   );
 } catch (e) {
-  if (page) {
-    console.error(
-      "UI errors:",
-      await page.getByRole("alert").allTextContents(),
-    );
-    await page.screenshot({
-      path: path.join(root, ".local/browser-failure.png"),
-    });
-  }
+  failed = true;
+  await diagnostic.failure(page, e);
+  console.error("Browser diagnostics:", artifactDir);
   throw e;
 } finally {
+  try {
+    await context?.tracing.stop(
+      failed ? { path: path.join(artifactDir, "trace.zip") } : {},
+    );
+  } catch (error) {
+    diagnostic.record("trace-error", { message: error.message });
+  }
   await browser?.close();
   manager?.kill("SIGTERM");
   proxy?.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 500));
+  await diagnostic.save();
   await fs.rm(dir, { recursive: true, force: true });
 }
