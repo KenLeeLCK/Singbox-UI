@@ -17,3 +17,7 @@ Assertions cover actual authenticated telemetry, inbound create/edit and native 
 The suite also runs authentication/recovery over HTTP and an isolated HTTPS reverse proxy with Tailscale Serve's Host-preserving behavior. It checks cookie flags, invalid credentials, reload persistence, initial and post-login configuration failures, optional status failure, session expiry, SSE interruption, logout invalidation and reauthentication. The full editor/navigation suite runs over HTTPS as well. OpenSSL is required for the ephemeral test certificate; only isolated contexts ignore certificate errors.
 
 Failure traces retain DOM/network diagnostics after replacing generated tokens and session cookie values. Trace screenshots are disabled because image bytes cannot reliably be redacted. Never use these test harnesses against production.
+
+## Dashboard activity regression
+
+`node tests/browser/activity.mjs` serves the production frontend build with synthetic telemetry on an ephemeral loopback port. It checks newest-first ordering, ten-row previews, hidden counts, keyboard controls, a 480px expanded viewport, live scroll anchoring when rows arrive/close, retained state across empty feeds, and unchanged row DOM for counter-only updates with hundreds of connections. Desktop and mobile layouts, including reduced motion, are covered. It uses no production credentials or services and runs as part of the browser test command. Build the frontend first.

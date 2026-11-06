@@ -52,10 +52,21 @@ func TestRealSingBoxNativeAPI(t *testing.T) {
 	if first.Version == "" || first.UploadTotal == nil {
 		t.Fatalf("missing real capabilities: %+v", first)
 	}
+	release := make(chan struct{})
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-release
 		_, _ = io.Copy(w, strings.NewReader(strings.Repeat("x", 256*1024)))
 	}))
 	defer target.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
 	proxy, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", proxyPort))
 	transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
@@ -64,6 +75,15 @@ func TestRealSingBoxNativeAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	await(t, 4*time.Second, func() bool {
+		for _, c := range monitor.Snapshot().Connections {
+			if c.Inbound == "test-in" && c.CreatedAt > 0 {
+				return true
+			}
+		}
+		return false
+	})
+	close(release)
 	n, err := io.Copy(io.Discard, response.Body)
 	response.Body.Close()
 	if err != nil || n != 256*1024 {

@@ -1549,3 +1549,37 @@ fieldset.field {
 [data-theme="light"] footer {
   color: #8191a7;
 }
+
+.activity-list {
+  overflow-anchor: none; /* Explicit row anchoring during telemetry updates. */
+}
+.activity-list.is-expanded {
+  max-height: 480px;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  animation: activity-expand 180ms ease-out;
+}
+.activity-controls {
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid #ffffff08;
+  padding-top: 6px;
+}
+.activity-toggle {
+  min-height: 44px;
+  padding: 8px 16px;
+}
+.activity-toggle svg {
+  transition: transform 180ms ease;
+}
+.activity-toggle svg.is-expanded {
+  transform: rotate(180deg);
+}
+@keyframes activity-expand {
+  from {
+    opacity: 0.7;
+  }
+  to {
+    opacity: 1;
+  }
+}

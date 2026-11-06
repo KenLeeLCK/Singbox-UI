@@ -24,6 +24,7 @@ import (
 
 type Connection struct {
 	ID            string `json:"id"`
+	CreatedAt     int64  `json:"createdAt"`
 	Inbound       string `json:"inbound"`
 	Outbound      string `json:"outbound"`
 	Network       string `json:"network"`
@@ -317,7 +318,7 @@ func (m *Monitor) readConnections(ctx context.Context, client wire.StartedServic
 					m.latest.ConnectionsTruncated = true
 					continue
 				}
-				m.connections[c.Id] = Connection{ID: c.Id, Inbound: c.Inbound, Outbound: c.Outbound, Network: c.Network, Source: c.Source, Destination: c.Destination, Domain: c.Domain, Protocol: c.Protocol, UploadTotal: c.UplinkTotal, DownloadTotal: c.DownlinkTotal}
+				m.connections[c.Id] = Connection{ID: c.Id, CreatedAt: c.CreatedAt, Inbound: c.Inbound, Outbound: c.Outbound, Network: c.Network, Source: c.Source, Destination: c.Destination, Domain: c.Domain, Protocol: c.Protocol, UploadTotal: c.UplinkTotal, DownloadTotal: c.DownlinkTotal}
 			} else if c, ok := m.connections[ev.Id]; ok {
 				c.UploadTotal += ev.UplinkDelta
 				c.DownloadTotal += ev.DownlinkDelta

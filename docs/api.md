@@ -37,7 +37,8 @@ interface Telemetry {
   connectionsAvailable: boolean;
   connectionsTruncated: boolean;
   connections: Array<{
-    id: string; inbound: string; outbound: string;
+    id: string; createdAt: number; // native connection creation timestamp
+    inbound: string; outbound: string;
     network: string; source: string; destination: string;
     domain: string; protocol: string;
     uploadTotal: number; downloadTotal: number;

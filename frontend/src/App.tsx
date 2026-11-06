@@ -51,6 +51,7 @@ import {
 import { SchemaForm } from "./components/SchemaForm";
 import { Chart } from "./components/Chart";
 import { Logs } from "./components/Logs";
+import { ActivityList } from "./components/ActivityList";
 const pages = [
   ["Overview", Gauge],
   ["Inbounds", ArrowDownLeft],
@@ -815,41 +816,8 @@ export default function App() {
                         remains native.
                       </p>
                     )}
-                    {telemetry.connections?.length ? (
-                      <div className="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Destination</th>
-                              <th>Inbound</th>
-                              <th>Outbound</th>
-                              <th>Network</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {telemetry.connections.map((c: Obj, i: number) => (
-                              <tr key={c.id || i}>
-                                <td>
-                                  {c.destination ||
-                                    c.host ||
-                                    c.metadata?.host ||
-                                    "—"}
-                                </td>
-                                <td>
-                                  {c.inbound || c.metadata?.inboundName || "—"}
-                                </td>
-                                <td>
-                                  {c.outbound || c.chains?.join(" → ") || "—"}
-                                </td>
-                                <td>
-                                  {c.network || c.metadata?.network || "—"}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
+                    <ActivityList connections={telemetry.connections || []} />
+                    {!telemetry.connections?.length && (
                       <div className="empty-inline">
                         <Activity size={22} />
                         <span>
