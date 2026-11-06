@@ -9,12 +9,17 @@ ARCH=$(docker info --format '{{.Architecture}}')
 case "$ARCH" in aarch64|arm64) ARCH=arm64;; x86_64|amd64) ARCH=amd64;; *) exit 2;; esac
 (cd backend && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -o "$WORK/manager" ./cmd/manager)
 cp -R scripts deploy "$WORK/"
+# Python imports earlier in CI leave caches in local packages. They must neither
+# abort installation nor become installed runtime files.
+mkdir -p "$WORK/scripts/__pycache__"
+printf 'fixture cache\n' > "$WORK/scripts/__pycache__/release.cpython-test.pyc"
 cp tests/installer/config_transactions.py tests/installer/fake_health.py "$WORK/"
 docker build -t sing-box-manager-installer-test tests/installer
 docker run -d --name "$NAME" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock sing-box-manager-installer-test
 for ((i=0;i<20;i++)); do docker exec "$NAME" test -d /run/systemd/system && break; sleep 1; done
 docker cp "$WORK/." "$NAME:/package"
 docker exec "$NAME" bash /package/scripts/install.sh --local-package /package
+docker exec "$NAME" test ! -e /usr/local/lib/sing-box-manager/scripts/__pycache__
 docker exec "$NAME" sh -c 'test "$(systemctl is-active sing-box)" = active && test "$(systemctl is-active sing-box-manager)" = active && test "$(systemctl show sing-box-manager -p User --value)" = sing-box-manager'
 docker exec "$NAME" sh -c 'sha256sum /etc/sing-box/config.json > /tmp/before; systemctl show sing-box -p MainPID --value > /tmp/pid'
 docker exec "$NAME" bash /package/scripts/install.sh --local-package /package

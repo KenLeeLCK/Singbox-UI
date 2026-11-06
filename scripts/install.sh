@@ -98,7 +98,9 @@ for unit in sing-box-manager.service sing-box-manager-helper.service; do
 done
 rm -rf "$DEST/scripts.next"
 mkdir "$DEST/scripts.next"
-cp "$PACKAGE/scripts/"* "$DEST/scripts.next/"
+# Local builds can contain Python bytecode caches or other generated files.
+# Install only the source scripts used by the runtime and maintenance commands.
+cp "$PACKAGE/scripts/"*.sh "$PACKAGE/scripts/"*.py "$DEST/scripts.next/"
 rm -rf "$DEST/scripts.previous"
 if [[ -d $DEST/scripts ]]; then mv "$DEST/scripts" "$DEST/scripts.previous"; fi
 mv "$DEST/scripts.next" "$DEST/scripts"

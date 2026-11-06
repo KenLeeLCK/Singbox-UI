@@ -27,3 +27,11 @@ The final full systemd scenario suite was also rerun after discovery changes and
 No live Tailscale account or production VPS was changed. Tailscale conflict refusal is exercised with a deterministic CLI fixture; real tailnet certificate/Serve setup remains unverified. Linux amd64 is cross-compiled but this local Docker host executes arm64. Ubuntu has not been booted for installer validation. GitHub release downloads for this new Manager cannot be exercised before a real repository/release exists; release checksum/extraction logic is tested locally. No release has been published.
 
 Automatic discovery deliberately excludes shell wrappers and executables renamed away from `sing-box`; no wrapper semantics are guessed. Ambiguous services require explicit selection; broken matching services require repair.
+
+## CI cache-directory regression after browser fix
+
+Runs for `31b4277` and `0163e93` passed browser integration but failed installation because earlier Python unit imports generated `scripts/__pycache__`. The installer used `cp scripts/*` without recursion and aborted on that directory. Reproduced in a disposable Debian/systemd container by including a cache fixture in the local package.
+
+Installer and release staging now select only top-level `.sh` and `.py` source files. macOS release tar creation disables AppleDouble metadata, keeping archives portable and free of generated sidecar files. The systemd fixture deliberately includes a Python cache and asserts it is absent from installed scripts.
+
+Validation: 9 Python tests passed with bytecode generation enabled; complete real systemd install/update/rollback/recovery/uninstall suite passed with the cache present; custom service discovery/preservation suite passed; amd64 and arm64 release archives rebuilt and checked for exactly the expected script sources, with no bytecode caches or metadata sidecars. Logs are retained locally under `.local/ci-f624cff/installer-cache-{before,after}.log` and `custom-service-after.log`. Production VPS and deployment security settings were not changed.
