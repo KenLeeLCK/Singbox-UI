@@ -70,3 +70,50 @@ func acceptsGzip(value string) bool {
 	}
 	return false
 }
+
+// SchemaCompression compresses only the public schema shape after normal API
+// authorization. Configuration, credentials, mutations and SSE are excluded.
+func SchemaCompression(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/schema" || r.Method != http.MethodGet || !acceptsGzip(r.Header.Get("Accept-Encoding")) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writer := &schemaWriter{ResponseWriter: w}
+		defer func() {
+			if writer.gzip != nil {
+				writer.gzip.Close()
+			}
+		}()
+		next.ServeHTTP(writer, r)
+	})
+}
+
+type schemaWriter struct {
+	http.ResponseWriter
+	gzip        *gzip.Writer
+	wroteHeader bool
+}
+
+func (w *schemaWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	if status == http.StatusOK {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		w.Header().Del("Content-Length")
+		w.gzip = gzip.NewWriter(w.ResponseWriter)
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+func (w *schemaWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.gzip != nil {
+		return w.gzip.Write(b)
+	}
+	return w.ResponseWriter.Write(b)
+}

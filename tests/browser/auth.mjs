@@ -174,6 +174,18 @@ try {
         ),
         200,
       );
+    let releaseSchema;
+    const schemaGate = new Promise((resolve) => {
+      releaseSchema = resolve;
+    });
+    await page.route("**/api/schema", async (route) => {
+      await schemaGate;
+      await route.continue();
+    });
+    await page.reload();
+    await dashboard(); // Must render even while schema has not responded.
+    releaseSchema();
+    await page.unroute("**/api/schema");
     await page.reload();
     await dashboard();
     await page.route("**/api/status", (r) =>

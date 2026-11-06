@@ -156,6 +156,16 @@ export default function App() {
         throw new Error(
           "Configuration could not be loaded. Check the Manager helper and retry.",
         );
+      if (generation !== loadGeneration.current) return;
+      setInfo(c);
+      setLive(c.config);
+      setConfig(c.draft?.config || c.config);
+      setBase(c.draft?.baseHash || c.hash);
+      setConflict(!!c.draft && c.draft.baseHash !== c.hash);
+      setJson(pretty(c.draft?.config || c.config));
+      setAuth(false);
+      setReady(true);
+      setLoading(false);
       const optional = await Promise.allSettled([
         api("status"),
         api("schema"),
@@ -170,12 +180,6 @@ export default function App() {
         )
           throw result.reason;
       }
-      setInfo(c);
-      setLive(c.config);
-      setConfig(c.draft?.config || c.config);
-      setBase(c.draft?.baseHash || c.hash);
-      setConflict(!!c.draft && c.draft.baseHash !== c.hash);
-      setJson(pretty(c.draft?.config || c.config));
       const [st, sc, hi] = optional;
       setStatus(st.status === "fulfilled" ? st.value || {} : {});
       setSchema(sc.status === "fulfilled" ? sc.value || {} : {});
@@ -185,8 +189,6 @@ export default function App() {
         setError(
           "Some installation details are unavailable. Refresh configuration to retry; JSON editing remains available.",
         );
-      setAuth(false);
-      setReady(true);
     } catch (e) {
       if (generation === loadGeneration.current) {
         handleError(e);

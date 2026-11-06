@@ -152,7 +152,7 @@ func main() {
 			log.Fatal(er)
 		}
 		mux := http.NewServeMux()
-		mux.Handle("/api/", s.Handler())
+		mux.Handle("/api/", web.SchemaCompression(s.Handler()))
 		mux.Handle("/healthz", s.Handler())
 		mux.Handle("/", web.Handler())
 		handler = mux

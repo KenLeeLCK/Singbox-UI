@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -41,5 +42,37 @@ func TestCompressedAssets(t *testing.T) {
 	}
 	if call("/", "gzip").Code != 200 {
 		t.Fatal("cache reuse failed")
+	}
+}
+
+func TestSchemaCompressionScope(t *testing.T) {
+	for _, tc := range []struct {
+		path       string
+		status     int
+		compressed bool
+	}{
+		{"/api/schema", 200, true}, {"/api/schema", 401, false}, {"/api/config", 200, false}, {"/api/telemetry", 200, false},
+	} {
+		h := SchemaCompression(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+			w.Write([]byte(`{"fixture":true}`))
+		}))
+		r := httptest.NewRequest("GET", tc.path, nil)
+		r.Header.Set("Accept-Encoding", "gzip")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if (w.Header().Get("Content-Encoding") == "gzip") != tc.compressed {
+			t.Fatal("incorrect compression scope", tc.path, tc.status)
+		}
+		if tc.compressed {
+			reader, err := gzip.NewReader(w.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := io.ReadAll(reader)
+			if string(data) != `{"fixture":true}` {
+				t.Fatal("incorrect schema")
+			}
+		}
 	}
 }
