@@ -4,8 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
+import { httpsProxy } from "./https-proxy.mjs";
 import { diagnostics } from "./diagnostics.mjs";
 const root = path.resolve(import.meta.dirname, "../..");
 const binary = process.env.MANAGER_BIN || path.join(root, "artifacts/manager");
@@ -30,6 +31,8 @@ const screenshotDir =
     : artifactDir;
 let browser, context, manager, proxy, page;
 let failed = false;
+let tlsProxy;
+const secrets = new Set();
 const errors = [];
 const deferEditorIdle = process.argv.includes("--defer-editor-idle");
 async function ports() {
@@ -101,22 +104,35 @@ try {
   );
   diagnostic.process("sing-box", proxy);
   diagnostic.process("manager", manager);
-  const base = `http://127.0.0.1:${webPort}`;
+  let base = `http://127.0.0.1:${webPort}`;
   await wait(async () => (await fetch(base + "/healthz")).ok);
   const token = (
     await fs.readFile(path.join(dir, "state/token"), "utf8")
   ).trim();
+  secrets.add(token);
+  secrets.add(live.services[0].secret);
+  if (process.argv.includes("--https")) {
+    tlsProxy = await httpsProxy(base, dir);
+    base = tlsProxy.url;
+  }
   browser = await chromium.launch();
   context = await browser.newContext({
+    ignoreHTTPSErrors: !!tlsProxy,
     viewport: { width: 1440, height: 1000 },
   });
   await context.tracing.start({
-    screenshots: true,
+    screenshots: false,
     snapshots: true,
     sources: true,
   });
   page = await context.newPage();
   diagnostic.page(page);
+  page.on("response", (response) => {
+    const cookie = response
+      .headers()
+      ["set-cookie"]?.match(/manager_session=([^;]+)/)?.[1];
+    if (cookie) secrets.add(cookie);
+  });
   page.setDefaultTimeout(10000);
   page.on("pageerror", (e) => {
     errors.push({ name: e.name, message: e.message, stack: e.stack });
@@ -402,7 +418,24 @@ try {
   } catch (error) {
     diagnostic.record("trace-error", { message: error.message });
   }
+  if (failed) {
+    const trace = path.join(artifactDir, "trace.zip");
+    try {
+      await fs.access(trace);
+      execFileSync(
+        "python3",
+        [path.join(root, "tests/browser/sanitize-trace.py"), trace],
+        {
+          input: JSON.stringify([...secrets]),
+          stdio: ["pipe", "ignore", "pipe"],
+        },
+      );
+    } catch {
+      await fs.rm(trace, { force: true });
+    }
+  }
   await browser?.close();
+  tlsProxy?.close();
   manager?.kill("SIGTERM");
   proxy?.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 500));

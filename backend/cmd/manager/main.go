@@ -9,7 +9,6 @@ import (
 	"github.com/sing-box-manager/sing-box-manager/backend/internal/core"
 	"github.com/sing-box-manager/sing-box-manager/backend/internal/telemetry"
 	"github.com/sing-box-manager/sing-box-manager/backend/internal/web"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -152,18 +151,10 @@ func main() {
 		if er = core.Atomic(filepath.Join(*state, "selected-port.json"), b, 0600); er != nil {
 			log.Fatal(er)
 		}
-		assets, _ := fs.Sub(web.Assets, "dist")
-		files := http.FileServer(http.FS(assets))
 		mux := http.NewServeMux()
 		mux.Handle("/api/", s.Handler())
 		mux.Handle("/healthz", s.Handler())
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
-			if _, er := fs.Stat(assets, strings.TrimPrefix(r.URL.Path, "/")); er != nil {
-				r.URL.Path = "/"
-			}
-			files.ServeHTTP(w, r)
-		})
+		mux.Handle("/", web.Handler())
 		handler = mux
 		log.Printf("Manager listening on http://127.0.0.1:%d; login token in %s", saved.Port, filepath.Join(*state, "token"))
 	}

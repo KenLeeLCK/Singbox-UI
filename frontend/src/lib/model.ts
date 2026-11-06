@@ -102,9 +102,21 @@ export function bytes(n?: number | null): string {
   const i = Math.min(4, Math.max(0, Math.floor(Math.log(n) / Math.log(1024))));
   return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${["B", "KB", "MB", "GB", "TB"][i]}`;
 }
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 export async function api(path: string, method = "GET", body?: unknown) {
   const r = await fetch("/api/" + path, {
     method,
+    // Deployment may include validation, restart, health checks and rollback.
+    signal: AbortSignal.timeout(
+      method === "GET" || path === "login" ? 15000 : 120000,
+    ),
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
@@ -112,8 +124,22 @@ export async function api(path: string, method = "GET", body?: unknown) {
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const value = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(value.error || `${r.status} ${r.statusText}`);
+  if (!r.ok) {
+    const detail = await r.json().catch(() => null);
+    const message =
+      r.status === 401
+        ? path === "login"
+          ? "Invalid access token."
+          : "Your session expired. Sign in again."
+        : detail?.error ||
+          `Request failed (${r.status}). Check Manager connectivity and retry.`;
+    throw new ApiError(r.status, message);
+  }
+  const value = await r.json().catch(() => {
+    throw new Error(
+      "Manager returned invalid JSON. Check the proxy target and retry.",
+    );
+  });
   return value;
 }
 

@@ -99,6 +99,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		expiry, ok := s.sessions.Load(c.Value)
 		if !ok || time.Now().After(expiry.(time.Time)) {
+			s.sessions.Delete(c.Value)
 			http.Error(w, "session expired", 401)
 			return
 		}
@@ -108,7 +109,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		if r.URL.Path == "/api/logout" && r.Method == "POST" {
 			s.sessions.Delete(c.Value)
-			http.SetCookie(w, &http.Cookie{Name: "manager_session", MaxAge: -1, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.SetCookie(w, &http.Cookie{Name: "manager_session", MaxAge: -1, Path: "/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode})
 			response(w, 200, map[string]bool{"ok": true})
 			return
 		}
@@ -158,6 +159,14 @@ func (s *Server) Handler() http.Handler {
 		s.Internal().ServeHTTP(w, r)
 	})
 }
+
+// Host is preserved by Tailscale Serve's TCP HTTP reverse proxy. Origin has
+// already passed the same-host check in Handler. Forwarded headers are deliberately
+// ignored: supporting Host-rewriting proxies requires an explicit trust model.
+func secureCookie(r *http.Request) bool {
+	return r.TLS != nil || strings.HasPrefix(r.Header.Get("Origin"), "https://")
+}
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.loginMu.Lock()
 	if time.Since(s.window) > time.Minute {
@@ -183,7 +192,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := make([]byte, 32)
-	rand.Read(v)
+	if _, err := rand.Read(v); err != nil {
+		fail(w, fmt.Errorf("cannot create session"))
+		return
+	}
 	key := hex.EncodeToString(v)
 	s.sessions.Range(func(k, v any) bool {
 		if time.Now().After(v.(time.Time)) {
@@ -192,7 +204,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return true
 	})
 	s.sessions.Store(key, time.Now().Add(12*time.Hour))
-	http.SetCookie(w, &http.Cookie{Name: "manager_session", Value: key, Path: "/", HttpOnly: true, Secure: r.TLS != nil || strings.HasPrefix(r.Header.Get("Origin"), "https://"), SameSite: http.SameSiteStrictMode, MaxAge: 43200})
+	http.SetCookie(w, &http.Cookie{Name: "manager_session", Value: key, Path: "/", HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: 43200})
 	response(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) Config() (map[string]any, error) {

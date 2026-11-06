@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import Editor, { DiffEditor } from "./components/CodeEditor";
+const Editor = lazy(() => import("./components/CodeEditor"));
+const DiffEditor = lazy(() =>
+  import("./components/CodeEditor").then((m) => ({ default: m.DiffEditor })),
+);
 import {
   Activity,
   ArrowDownLeft,
@@ -31,6 +34,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  ApiError,
   bytes,
   collection,
   dependency,
@@ -101,6 +105,7 @@ export default function App() {
     [auth, setAuth] = useState(false),
     [token, setToken] = useState(""),
     [loading, setLoading] = useState(true),
+    [ready, setReady] = useState(false),
     [message, setMessage] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -127,37 +132,80 @@ export default function App() {
   draftRef.current = dirty;
   const baseRef = useRef(base);
   baseRef.current = base;
-  async function load() {
-    const c = await api("config");
-    setInfo(c);
-    setLive(c.config || {});
-    setConfig(c.draft?.config || c.config || {});
-    setBase(c.draft?.baseHash || c.hash);
-    setConflict(!!c.draft && c.draft.baseHash !== c.hash);
-    setJson(pretty(c.draft?.config || c.config || {}));
-    setStatus(await api("status"));
-    try {
-      setSchema(await api("schema"));
-    } catch {
-      setSchema({});
+  const loadGeneration = useRef(0);
+  function handleError(e: unknown) {
+    setError(
+      e instanceof Error ? e.message : "Unexpected error. Please retry.",
+    );
+    if (e instanceof ApiError && e.status === 401) {
+      loadGeneration.current++;
+      setAuth(true);
+      setReady(false);
+      setLogs(false);
+      setDiff(false);
+      setEditing(null);
     }
+  }
+  async function load() {
+    const generation = ++loadGeneration.current;
+    setLoading(true);
+    setError("");
     try {
-      const h = await api("history");
-      setHistory(Array.isArray(h) ? h : h.history || []);
-    } catch {
-      /* No history yet */
+      const c = await api("config");
+      if (!c?.config || typeof c.config !== "object" || Array.isArray(c.config))
+        throw new Error(
+          "Configuration could not be loaded. Check the Manager helper and retry.",
+        );
+      const optional = await Promise.allSettled([
+        api("status"),
+        api("schema"),
+        api("history"),
+      ]);
+      if (generation !== loadGeneration.current) return;
+      for (const result of optional) {
+        if (
+          result.status === "rejected" &&
+          result.reason instanceof ApiError &&
+          result.reason.status === 401
+        )
+          throw result.reason;
+      }
+      setInfo(c);
+      setLive(c.config);
+      setConfig(c.draft?.config || c.config);
+      setBase(c.draft?.baseHash || c.hash);
+      setConflict(!!c.draft && c.draft.baseHash !== c.hash);
+      setJson(pretty(c.draft?.config || c.config));
+      const [st, sc, hi] = optional;
+      setStatus(st.status === "fulfilled" ? st.value || {} : {});
+      setSchema(sc.status === "fulfilled" ? sc.value || {} : {});
+      const h = hi.status === "fulfilled" ? hi.value : null;
+      setHistory(Array.isArray(h) ? h : h?.history || []);
+      if (optional.some((r) => r.status === "rejected"))
+        setError(
+          "Some installation details are unavailable. Refresh configuration to retry; JSON editing remains available.",
+        );
+      setAuth(false);
+      setReady(true);
+    } catch (e) {
+      if (generation === loadGeneration.current) {
+        handleError(e);
+        setLoading(false);
+      }
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }
   useEffect(() => {
-    load()
-      .catch((e) => {
-        setError(e.message);
-        if (/401|unauthorized|authentication/i.test(e.message)) setAuth(true);
-      })
-      .finally(() => setLoading(false));
+    void load();
+    return () => {
+      loadGeneration.current++;
+    };
   }, []);
   useEffect(() => {
-    if (auth || loading) return;
+    if (auth || loading || !ready) return;
+    let active = true;
+    let polling = false;
     const es = new EventSource("/api/telemetry");
     const receive = (e: MessageEvent) => {
       try {
@@ -179,31 +227,44 @@ export default function App() {
         error: "Monitoring connection lost. Reconnecting…",
       }));
     const timer = setInterval(() => {
-      api("status")
-        .then(setStatus)
-        .catch(() => {});
-      api("config")
-        .then((c) => {
-          if (c.hash !== baseRef.current) {
-            if (draftRef.current) {
-              setLive(c.config);
-              setConflict(true);
-            } else {
-              setLive(c.config);
-              setConfig(c.config);
-              setJson(pretty(c.config));
-              setBase(c.hash);
-              setInfo(c);
+      if (polling) return;
+      polling = true;
+      const report = (e: unknown) => {
+        if (active) handleError(e);
+      };
+      void Promise.all([
+        api("status")
+          .then((s) => {
+            if (active) setStatus(s);
+          })
+          .catch(report),
+        api("config")
+          .then((c) => {
+            if (!active) return;
+            if (c.hash !== baseRef.current) {
+              if (draftRef.current) {
+                setLive(c.config);
+                setConflict(true);
+              } else {
+                setLive(c.config);
+                setConfig(c.config);
+                setJson(pretty(c.config));
+                setBase(c.hash);
+                setInfo(c);
+              }
             }
-          }
-        })
-        .catch(() => {});
+          })
+          .catch(report),
+      ]).finally(() => {
+        polling = false;
+      });
     }, 5000);
     return () => {
+      active = false;
       es.close();
       clearInterval(timer);
     };
-  }, [auth, loading]);
+  }, [auth, loading, ready]);
   const change = (c: Obj) => {
     setConfig(c);
     setJson(pretty(c));
@@ -215,7 +276,7 @@ export default function App() {
     try {
       await fn();
     } catch (e) {
-      setError((e as Error).message);
+      handleError(e);
     } finally {
       setBusy(false);
     }
@@ -284,7 +345,9 @@ export default function App() {
             run(async () => {
               await api("login", "POST", { token });
               setToken("");
+              setPage("Overview");
               setAuth(false);
+              setReady(false);
               await load();
             });
           }}
@@ -308,6 +371,30 @@ export default function App() {
         <small>
           <Lock size={12} /> Private access · token stays on this device
         </small>
+      </div>
+    );
+  if (!ready)
+    return (
+      <div className="login glass">
+        <Box />
+        <h1>
+          {loading
+            ? "Loading your installation"
+            : "Unable to load configuration"}
+        </h1>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <p>Check Manager connectivity and the helper service, then retry.</p>
+        <button
+          className="primary"
+          disabled={loading}
+          onClick={() => void load()}
+        >
+          <RefreshCw size={16} /> Retry loading
+        </button>
       </div>
     );
   return (
@@ -1035,7 +1122,7 @@ export default function App() {
                             throw Error("Configuration must be an object");
                           change(v);
                         } catch (e) {
-                          setError((e as Error).message);
+                          handleError(e);
                         }
                       }}
                     >
@@ -1043,44 +1130,52 @@ export default function App() {
                     </button>
                     <button onClick={() => setDiff(true)}>View diff</button>
                   </div>
-                  <Editor
-                    height="58vh"
-                    language="json"
-                    theme={light ? "light" : "vs-dark"}
-                    value={json}
-                    onChange={(v) => {
-                      setJson(v || "");
-                      try {
-                        const c = JSON.parse(v || "");
-                        if (c && typeof c === "object" && !Array.isArray(c))
-                          setConfig(c);
-                      } catch {
-                        /* Keep invalid text without corrupting model */
-                      }
-                    }}
-                    onMount={(_editor, m) => {
-                      m.json.jsonDefaults.setDiagnosticsOptions({
-                        validate: true,
-                        schemas: Object.keys(schema).length
-                          ? [
-                              {
-                                uri: "https://sing-box.sagernet.org/schema.json",
-                                fileMatch: ["*"],
-                                schema,
-                              },
-                            ]
-                          : [],
-                      });
-                    }}
-                    options={{
-                      readOnly: info.readOnly,
-                      minimap: { enabled: false },
-                      fontSize: 13,
-                      padding: { top: 18 },
-                      scrollBeyondLastLine: false,
-                      automaticLayout: true,
-                    }}
-                  />
+                  <Suspense
+                    fallback={
+                      <div className="empty glass" role="status">
+                        Loading configuration editor…
+                      </div>
+                    }
+                  >
+                    <Editor
+                      height="58vh"
+                      language="json"
+                      theme={light ? "light" : "vs-dark"}
+                      value={json}
+                      onChange={(v) => {
+                        setJson(v || "");
+                        try {
+                          const c = JSON.parse(v || "");
+                          if (c && typeof c === "object" && !Array.isArray(c))
+                            setConfig(c);
+                        } catch {
+                          /* Keep invalid text without corrupting model */
+                        }
+                      }}
+                      onMount={(_editor, m) => {
+                        m.json.jsonDefaults.setDiagnosticsOptions({
+                          validate: true,
+                          schemas: Object.keys(schema).length
+                            ? [
+                                {
+                                  uri: "https://sing-box.sagernet.org/schema.json",
+                                  fileMatch: ["*"],
+                                  schema,
+                                },
+                              ]
+                            : [],
+                        });
+                      }}
+                      options={{
+                        readOnly: info.readOnly,
+                        minimap: { enabled: false },
+                        fontSize: 13,
+                        padding: { top: 18 },
+                        scrollBeyondLastLine: false,
+                        automaticLayout: true,
+                      }}
+                    />
+                  </Suspense>
                   <p className="muted">
                     Unknown fields are preserved. Invalid JSON must be corrected
                     before saving. Use Ctrl/Cmd+F to search and Ctrl/Cmd+H to
@@ -1247,19 +1342,27 @@ export default function App() {
               {error}
             </p>
           )}
-          <DiffEditor
-            height="55vh"
-            language="json"
-            original={pretty(live)}
-            modified={pretty(config)}
-            theme={light ? "light" : "vs-dark"}
-            options={{
-              readOnly: true,
-              minimap: { enabled: false },
-              renderSideBySide: window.innerWidth > 700,
-              automaticLayout: true,
-            }}
-          />
+          <Suspense
+            fallback={
+              <div className="empty glass" role="status">
+                Loading configuration editor…
+              </div>
+            }
+          >
+            <DiffEditor
+              height="55vh"
+              language="json"
+              original={pretty(live)}
+              modified={pretty(config)}
+              theme={light ? "light" : "vs-dark"}
+              options={{
+                readOnly: true,
+                minimap: { enabled: false },
+                renderSideBySide: window.innerWidth > 700,
+                automaticLayout: true,
+              }}
+            />
+          </Suspense>
           <div className="modal-footer">
             <button onClick={() => setDiff(false)}>Keep editing</button>
             <button
@@ -1313,7 +1416,7 @@ export default function App() {
                 change(replaceCollection(config, editing.section, next));
                 setEditing(null);
               } catch (e) {
-                setError((e as Error).message);
+                handleError(e);
               }
             }}
           >

@@ -109,3 +109,59 @@ func TestLogoutRequiresPOST(t *testing.T) {
 		t.Fatal("GET logged user out")
 	}
 }
+
+func TestSessionTransportAndExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin, forwarded string
+		secure                  bool
+	}{
+		{"localhost", "http://example.com", "", false},
+		{"serve-preserves-host", "https://example.com", "https", true},
+		{"spoofed-forwarded", "http://example.com", "https", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{Token: "isolated-test-token"}
+			call := func(path, origin, token string, cookie *http.Cookie) *httptest.ResponseRecorder {
+				body, _ := json.Marshal(map[string]string{"token": token})
+				r := httptest.NewRequest("POST", path, bytes.NewReader(body))
+				r.Header.Set("Origin", origin)
+				r.Header.Set("X-Forwarded-Proto", tc.forwarded)
+				r.Header.Set("X-Forwarded-Host", "evil.test")
+				if cookie != nil {
+					r.AddCookie(cookie)
+				}
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, r)
+				return w
+			}
+			if w := call("/api/login", tc.origin, "wrong", nil); w.Code != 401 {
+				t.Fatal(w.Code)
+			}
+			w := call("/api/login", tc.origin, s.Token, nil)
+			if w.Code != 200 {
+				t.Fatal(w.Code)
+			}
+			c := w.Result().Cookies()[0]
+			if c.Secure != tc.secure || !c.HttpOnly || c.Path != "/" || c.MaxAge != 43200 || c.SameSite != http.SameSiteStrictMode {
+				t.Fatal("incorrect cookie attributes")
+			}
+			if w := call("/api/logout", "https://evil.test", "", c); w.Code != 403 {
+				t.Fatal("cross origin accepted")
+			}
+			w = call("/api/logout", tc.origin, "", c)
+			if w.Code != 200 || w.Result().Cookies()[0].MaxAge != -1 || w.Result().Cookies()[0].Secure != tc.secure {
+				t.Fatal("logout failed")
+			}
+			if w := call("/api/logout", tc.origin, "", c); w.Code != 401 {
+				t.Fatal("session survived logout")
+			}
+			s.sessions.Store(c.Value, time.Now().Add(-time.Second))
+			if w := call("/api/logout", tc.origin, "", c); w.Code != 401 {
+				t.Fatal("expired session accepted")
+			}
+			if _, ok := s.sessions.Load(c.Value); ok {
+				t.Fatal("expired session retained")
+			}
+		})
+	}
+}
