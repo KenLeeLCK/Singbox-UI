@@ -21,16 +21,18 @@ import (
 )
 
 type Options struct {
-	StateDir    string
-	Config      string
-	Binary      string
-	Unit        string
-	WorkingDir  string
-	Sources     []string
-	ReadOnly    bool
-	Local       bool
-	discoveryID string
-	discovered  bool
+	StateDir         string
+	Config           string
+	Binary           string
+	Unit             string
+	WorkingDir       string
+	Sources          []string
+	ReadOnly         bool
+	Local            bool
+	configDirectory  bool
+	discoveredConfig string
+	discoveryID      string
+	discovered       bool
 }
 type Engine struct {
 	Options
@@ -140,6 +142,7 @@ func New(o Options) (*Engine, error) {
 	if len(o.Sources) == 0 && o.Config != "" {
 		o.Sources = []string{o.Config}
 	}
+	o.discoveredConfig = o.Config
 	return &Engine{Options: o}, nil
 }
 func discover(o *Options) {
@@ -182,6 +185,15 @@ func parseDiscovery(o *Options, s string) {
 		}
 	}
 	args = normalized
+	if strings.Count(s, "argv[]=") != 1 {
+		o.ReadOnly = true
+	}
+	for _, arg := range args {
+		if strings.ContainsAny(arg, "\"'\\$") {
+			o.ReadOnly = true
+		}
+	}
+	runs, selectors := 0, 0
 	serviceWD := o.WorkingDir
 	for i, v := range args {
 		if (v == "-D" || v == "--directory") && i+1 < len(args) {
@@ -194,15 +206,26 @@ func parseDiscovery(o *Options, s string) {
 	}
 	for i := 0; i < len(args); i++ {
 		v := args[i]
-		if strings.ContainsAny(v, "\"'\\$") {
+		if i > 0 && v == "run" {
+			runs++
+			continue
+		}
+		if i > 0 && v != "--disable-color" && v != "-c" && v != "--config" && v != "-C" && v != "--config-directory" && v != "-D" && v != "--directory" {
 			o.ReadOnly = true
 		}
-		if strings.HasPrefix(v, "-") && v != "-c" && v != "--config" && v != "-C" && v != "--config-directory" && v != "-D" && v != "--directory" && v != "--disable-color" {
-			o.ReadOnly = true
+		if v == "-c" || v == "--config" || v == "-C" || v == "--config-directory" || v == "-D" || v == "--directory" {
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				o.ReadOnly = true
+				break
+			}
 		}
 		if (v == "-c" || v == "--config") && i+1 < len(args) {
 			i++
 			p := args[i]
+			selectors++
+			if p == "stdin" || filepath.Ext(p) != ".json" {
+				o.ReadOnly = true
+			}
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(o.WorkingDir, p)
 			}
@@ -214,13 +237,37 @@ func parseDiscovery(o *Options, s string) {
 		if (v == "-C" || v == "--config-directory") && i+1 < len(args) {
 			i++
 			dir := args[i]
+			selectors++
+			o.configDirectory = true
 			if !filepath.IsAbs(dir) {
 				dir = filepath.Join(o.WorkingDir, dir)
 			}
-			files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
-			o.Sources = append(o.Sources, files...)
-			o.ReadOnly = true
+			info, err := os.Lstat(dir)
+			if err != nil || !info.IsDir() {
+				o.ReadOnly = true
+				continue
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				o.ReadOnly = true
+				continue
+			}
+			for _, entry := range entries {
+				// Match sing-box 1.14: nonrecursive, case-sensitive .json suffix.
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+					continue
+				}
+				path := filepath.Join(dir, entry.Name())
+				o.Sources = append(o.Sources, path)
+				info, err := os.Lstat(path)
+				if err != nil || !info.Mode().IsRegular() {
+					o.ReadOnly = true
+				}
+			}
 		}
+	}
+	if runs != 1 || selectors != 1 {
+		o.ReadOnly = true
 	}
 	if len(args) > 0 && filepath.IsAbs(args[0]) {
 		o.Binary = args[0]
@@ -232,11 +279,10 @@ func parseDiscovery(o *Options, s string) {
 		o.ReadOnly = true
 	}
 	identity, _ := json.Marshal(struct {
-		Args     []string
-		WD       string
-		Binary   string
-		ReadOnly bool
-	}{args, o.WorkingDir, o.Binary, o.ReadOnly})
+		Args   []string
+		WD     string
+		Binary string
+	}{args, o.WorkingDir, o.Binary})
 	o.discoveryID = hash(identity)
 	if len(o.Sources) == 1 {
 		o.Config = o.Sources[0]
@@ -253,8 +299,11 @@ func (e *Engine) refreshDiscovery() error {
 	}
 	current := Options{Unit: e.Unit}
 	discover(&current)
-	if current.discoveryID == "" || current.discoveryID != e.discoveryID {
+	if current.discoveryID == "" || current.discoveryID != e.discoveryID || (e.discoveredConfig != "" && current.Config != "" && e.discoveredConfig != current.Config) {
 		return errors.New("effective sing-box service configuration changed or cannot be inspected; restart the Manager helper to rediscover before editing")
+	}
+	if e.discoveredConfig == "" {
+		e.discoveredConfig = current.Config
 	}
 	e.Sources = current.Sources
 	e.Config = current.Config
@@ -266,6 +315,15 @@ func (e *Engine) snapshot() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	s := Snapshot{Config: json.RawMessage(`{}`), Sources: e.Sources, ReadOnly: e.ReadOnly}
+	for _, path := range e.Sources {
+		info, err := os.Stat(path)
+		if err != nil {
+			return s, err
+		}
+		if !info.Mode().IsRegular() {
+			return s, errors.New("configuration source must be a regular file")
+		}
+	}
 	if e.Config == "" {
 		if len(e.Sources) == 0 {
 			return s, nil
@@ -497,21 +555,32 @@ func (e *Engine) validate(b []byte) error {
 	if e.Binary == "" {
 		return errors.New("sing-box binary unavailable")
 	}
-	f, er := os.CreateTemp(filepath.Dir(e.Config), ".manager-check-*.json")
+	// Never put an active .json candidate in the live configuration directory.
+	dir, er := os.MkdirTemp(e.StateDir, "check-")
+	if er != nil {
+		return er
+	}
+	defer os.RemoveAll(dir)
+	f, er := os.CreateTemp(dir, "candidate-*.json")
 	if er != nil {
 		return er
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	f.Chmod(0600)
 	_, er = f.Write(b)
-	f.Close()
+	closeErr := f.Close()
+	if er == nil {
+		er = closeErr
+	}
 	if er != nil {
 		return er
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	args := []string{"check", "-c", name}
+	if e.configDirectory {
+		args = []string{"check", "-C", dir}
+	}
 	if e.WorkingDir != "" {
 		args = append(args, "-D", e.WorkingDir)
 	}
@@ -607,6 +676,9 @@ func (e *Engine) Apply() error {
 	}
 	if er = e.refreshDiscovery(); er != nil {
 		return er
+	}
+	if e.ReadOnly || len(e.Sources) != 1 || len(s.Sources) != 1 || e.Sources[0] != s.Sources[0] {
+		return errors.New("effective configuration sources changed during validation")
 	}
 	before, er := os.ReadFile(e.Config)
 	if er != nil {
