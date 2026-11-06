@@ -184,7 +184,11 @@ try {
     });
     await page.reload();
     await dashboard(); // Must render even while schema has not responded.
+    const completedSchema = page.waitForResponse(
+      (r) => r.url().endsWith("/api/schema") && r.status() === 200,
+    );
     releaseSchema();
+    await completedSchema;
     await page.unroute("**/api/schema");
     await page.reload();
     await dashboard();
