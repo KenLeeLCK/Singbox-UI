@@ -94,6 +94,7 @@ export async function diagnostics(directory) {
             page.screenshot({
               path: path.join(directory, "failure.png"),
               fullPage: true,
+              mask: [page.locator(".monaco-editor")],
             }),
         ],
         [

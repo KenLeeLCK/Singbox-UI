@@ -383,6 +383,7 @@ try {
   assert.ok(await dialog().isVisible());
   await page.screenshot({
     path: path.join(screenshotDir, "editor-mobile.png"),
+    mask: [page.locator(".monaco-editor")],
   });
   await dialog().getByLabel("Close", { exact: true }).click();
   for (const name of [

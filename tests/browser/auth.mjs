@@ -233,6 +233,31 @@ try {
     await page.getByRole("button", { name: "Live Logs" }).click();
     await page.getByLabel("Search logs").waitFor();
     await page.getByRole("button", { name: "Close", exact: true }).click();
+    await nav("JSON Editor").click();
+    await page.locator(".monaco-editor textarea").first().focus();
+    await page.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await page.keyboard.press("Backspace");
+    await page.keyboard.insertText(
+      JSON.stringify({
+        outbounds: [{ type: "direct", tag: "imported-direct" }],
+      }),
+    );
+    await page.getByRole("button", { name: "Format & synchronize" }).click();
+    await nav("Outbounds").click();
+    await page.getByText("imported-direct", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Save draft", exact: true }).click();
+    assert.equal(
+      await page.evaluate(
+        async () =>
+          (await (await fetch("/api/config")).json()).draft.config.outbounds[0]
+            .tag,
+      ),
+      "imported-direct",
+    );
+    await nav("Overview").click();
+    console.log("PASS JSON configuration import and draft persistence");
     await page.screenshot({
       path: path.join(
         artifacts,
