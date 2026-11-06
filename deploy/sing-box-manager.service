@@ -1,0 +1,28 @@
+[Unit]
+Description=sing-box Manager private web interface
+After=network.target sing-box-manager-helper.service
+Requires=sing-box-manager-helper.service
+
+[Service]
+User=sing-box-manager
+Group=sing-box-manager
+ExecStart=/usr/local/lib/sing-box-manager/manager serve --state-dir /var/lib/sing-box-manager --helper-socket /run/sing-box-manager/helper.sock
+Restart=on-failure
+RestartSec=3
+StateDirectory=sing-box-manager
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+[Unit]
+Description=sing-box Manager restricted deployment helper
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+User=root
+Group=sing-box-manager
+ExecStart=/usr/local/lib/sing-box-manager/manager helper --state-dir /var/lib/sing-box-manager-helper --socket /run/sing-box-manager/helper.sock --socket-group sing-box-manager --unit sing-box.service
+RuntimeDirectory=sing-box-manager
+RuntimeDirectoryMode=0750
+StateDirectory=sing-box-manager-helper
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
